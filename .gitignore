@@ -1,0 +1,18 @@
+# Private configuration
+.streamlit/secrets.toml
+.env
+
+# Student database and backups
+*.db
+*.sqlite
+*.sqlite3
+
+# Python temporary files
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local backup files
+app_backup.py
+app_before_dark_theme.py
