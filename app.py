@@ -5,6 +5,7 @@ import streamlit.components.v1 as components
 
 from syllabus_data import EXTRA_SYLLABUS
 from exam_data import EXAMS
+from openai import OpenAI
 
 from database import (
     initialize_database,
