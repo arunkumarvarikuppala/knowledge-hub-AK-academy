@@ -1,4 +1,7 @@
 import sqlite3
+import os
+import math
+from contextlib import contextmanager, closing
 import hashlib
 import hmac
 import secrets
@@ -9,7 +12,7 @@ from pathlib import Path
 # DATABASE CONFIGURATION
 # --------------------------------------------------
 
-DB_PATH = Path(__file__).resolve().parent / "knowledgehub.db"
+DB_PATH = Path(os.environ.get("KNOWLEDGEHUB_DB_PATH", str(Path(__file__).resolve().parent / "knowledgehub.db")))
 
 PASSWORD_ITERATIONS = 600_000
 
@@ -18,12 +21,20 @@ PASSWORD_ITERATIONS = 600_000
 # DATABASE CONNECTION
 # --------------------------------------------------
 
+@contextmanager
 def get_connection():
     """Create a connection to the SQLite database."""
     conn = sqlite3.connect(str(DB_PATH), timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 # --------------------------------------------------
@@ -91,7 +102,7 @@ def initialize_database():
                 student_id TEXT UNIQUE NOT NULL,
                 name TEXT NOT NULL,
                 class_name TEXT NOT NULL
-                    CHECK (class_name IN ('Class 9', 'Class 10')),
+                    CHECK (class_name IN ('Class 6', 'Class 7', 'Class 8', 'Class 9', 'Class 10')),
                 password_hash TEXT NOT NULL,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
@@ -176,7 +187,8 @@ def migrate_student_classes():
     Existing student IDs, password hashes, and exam results are copied intact.
     Run this only after taking a backup of knowledgehub.db.
     """
-    conn = get_connection()
+    conn = sqlite3.connect(str(DB_PATH), timeout=10)
+    conn.row_factory = sqlite3.Row
     try:
         schema_row = conn.execute(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='students'"
@@ -188,6 +200,12 @@ def migrate_student_classes():
         if "CHECK" not in schema.upper() or "Class 9" not in schema or "Class 10" not in schema:
             return
 
+        # SQLite's backup API includes committed WAL contents consistently.
+        backup_path = DB_PATH.with_name(DB_PATH.name + ".before-class-migration.bak")
+        if not backup_path.exists():
+            with closing(sqlite3.connect(str(backup_path))) as backup:
+                conn.backup(backup)
+
         result_columns = {r["name"] for r in conn.execute("PRAGMA table_info(exam_results)").fetchall()}
         student_columns = {r["name"] for r in conn.execute("PRAGMA table_info(students)").fetchall()}
         conn.commit()
@@ -197,7 +215,7 @@ def migrate_student_classes():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             student_id TEXT UNIQUE NOT NULL,
             name TEXT NOT NULL,
-            class_name TEXT NOT NULL,
+            class_name TEXT NOT NULL CHECK (class_name IN ('Class 6', 'Class 7', 'Class 8', 'Class 9', 'Class 10')),
             password_hash TEXT NOT NULL,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )""")
@@ -427,6 +445,9 @@ def add_exam_result(
     except (ValueError, TypeError):
         return False, "Marks must be valid numbers."
 
+    if not math.isfinite(marks) or not math.isfinite(total_marks):
+        return False, "Marks must be finite numbers."
+
     if total_marks <= 0:
         return False, "Total marks must be greater than zero."
 
@@ -539,3 +560,26 @@ def get_student_results(student_id=None):
             """, (student_id.strip(),)).fetchall()
 
     return results
+
+def has_teacher():
+    with get_connection() as conn:
+        return conn.execute("SELECT 1 FROM teachers LIMIT 1").fetchone() is not None
+
+
+def setup_first_teacher(username, password, supplied_key, configured_key):
+    """Atomically bootstrap one teacher; never accepts an absent/weak setup key."""
+    if not isinstance(configured_key, str) or len(configured_key) < 32:
+        return False, "Teacher setup is disabled. Configure a random setup key of at least 32 characters."
+    if not hmac.compare_digest(str(supplied_key).encode(), configured_key.encode()):
+        return False, "Setup could not be completed. Check the setup key."
+    username = username.strip()
+    if not username or len(username) > 100 or len(password) < 12:
+        return False, "Enter a username (1–100 characters) and a password of at least 12 characters."
+    password_hash = hash_password(password)
+    with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if conn.execute("SELECT 1 FROM teachers LIMIT 1").fetchone():
+            return False, "Initial teacher setup is already complete. Please log in."
+        conn.execute("INSERT INTO teachers (username, password_hash) VALUES (?, ?)",
+                     (username, password_hash))
+    return True, "Teacher account created. Log in using your new credentials."
