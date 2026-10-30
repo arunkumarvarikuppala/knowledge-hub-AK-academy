@@ -1,4 +1,5 @@
 import streamlit as st
+import html
 from datetime import date, datetime, timedelta
 import streamlit.components.v1 as components
 
@@ -28,9 +29,14 @@ st.set_page_config(
     layout="wide",
 )
 
-initialize_database()
-migrate_exam_results()
-migrate_student_classes()
+@st.cache_resource
+def prepare_database():
+    initialize_database()
+    migrate_exam_results()
+    migrate_student_classes()
+    return True
+
+prepare_database()
 
 
 # ======================================================
@@ -40,7 +46,7 @@ migrate_student_classes()
 st.markdown(
     """
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&display=swap');
+
     :root {
       --kh-ink:#f4f7ff; --kh-muted:#c1cce3; --kh-blue:#7da2ff; --kh-violet:#b49aff;
       --kh-panel:#182544; --kh-panel-border:#34466f;
@@ -114,6 +120,16 @@ st.markdown(
     .kh-footer { text-align:center; color:#aab8d4 !important; font-size:12px; padding:22px 0 8px; }
     hr { border-color:#35466c !important; }
     @media(max-width:700px){ .kh-hero{padding:20px;border-radius:18px}.kh-hero .orb{font-size:44px}.kh-card{padding:15px} }
+    @media(max-width:700px){
+      .block-container{padding:1rem .75rem 2rem !important}
+      [data-testid="stHorizontalBlock"]{flex-wrap:wrap !important;gap:.6rem !important}
+      [data-testid="stColumn"]{min-width:100% !important;flex:1 1 100% !important}
+      button,input{min-height:44px}
+      [role="tablist"]{overflow-x:auto;flex-wrap:nowrap}
+      .kh-hero,.kh-card{box-shadow:none}.kh-hero .orb{animation:none}
+      h1,h2,h3{overflow-wrap:anywhere}
+    }
+    @media(prefers-reduced-motion:reduce){*{animation:none !important;transition:none !important}}
     </style>
     """,
     unsafe_allow_html=True,
@@ -166,7 +182,7 @@ def show_ai_tutor(user):
             api_key = st.secrets["GROQ_API_KEY"]
             from groq import Groq
 
-            client = Groq(api_key=api_key)
+            client = Groq(api_key=api_key, timeout=30, max_retries=1)
             student_class = user.get("class_name", "ICSE school")
             system_prompt = f"""
 You are Knowledge Hub AI Tutor for ICSE students.
@@ -346,6 +362,7 @@ def teacher_dashboard(user):
 # STARTER SYLLABUS CONTENT
 # ======================================================
 
+@st.cache_data(show_spinner=False)
 def build_syllabus():
     syllabus = {
         "Class 9": {
@@ -530,7 +547,8 @@ def show_mock_examinations(user):
         if str(exam.get("class", "")).strip().lower() == student_class
     }
     if not eligible_exams:
-        eligible_exams = EXAMS
+        st.info("No mock examinations are available for your class yet.")
+        return
 
     selected_exam = st.selectbox(
         "Choose an examination", options=list(eligible_exams.keys()),
@@ -736,7 +754,7 @@ def show_mock_examinations(user):
 # ======================================================
 
 def student_dashboard(user):
-    st.markdown(f"<section class='kh-hero'><span class='orb'>🚀</span><h2>Welcome back, {user.get('name', 'Learner')}!</h2><p>Your learning adventure starts here. Explore, practise, ask questions and celebrate every improvement.</p></section>", unsafe_allow_html=True)
+    st.markdown(f"<section class='kh-hero'><span class='orb'>🚀</span><h2>Welcome back, {html.escape(str(user.get('name', 'Learner')))}!</h2><p>Your learning adventure starts here. Explore, practise, ask questions and celebrate every improvement.</p></section>", unsafe_allow_html=True)
 
     card_cols = st.columns(4)
     card_data = [("📚", "Learn", "Explore class-wise chapters"), ("🤖", "Ask AI", "Understand difficult topics"), ("🎯", "Practise", "Build confidence with tests"), ("🏆", "Progress", "Track your achievements")]
@@ -744,11 +762,9 @@ def student_dashboard(user):
         with col:
             st.markdown(f"<div class='kh-card'><div class='kh-icon'>{icon}</div><div class='kh-card-title'>{title}</div><div class='kh-card-text'>{detail}</div></div>", unsafe_allow_html=True)
     st.write("")
-    syllabus_tab, ai_tab, mock_tab, results_tab = st.tabs(
-        ["📚 Learning Centre", "🤖 AI Doubt Solver", "🎯 Mock Exams", "🏆 My Results"]
-    )
+    page = st.selectbox("Open learning page", ["📚 Learning Centre", "🤖 AI Doubt Solver", "🎯 Mock Exams", "🏆 My Results"], key="kh_page")
 
-    with syllabus_tab:
+    if page == "📚 Learning Centre":
         st.subheader("📚 ICSE Learning Centre")
         academic_year = st.selectbox(
             "🎓 Choose the academic year", ["2026–27", "2027–28"],
@@ -806,13 +822,13 @@ def student_dashboard(user):
             }]
             st.info("Your chapter question is ready. Open the AI Doubt Solver tab to get the explanation.")
 
-    with ai_tab:
+    if page == "🤖 AI Doubt Solver":
         show_ai_tutor(user)
 
-    with mock_tab:
+    if page == "🎯 Mock Exams":
         show_mock_examinations(user)
 
-    with results_tab:
+    if page == "🏆 My Results":
         st.subheader("My Examination Results")
         student_internal_id = user.get("student_id")
         if student_internal_id is None:
@@ -839,6 +855,8 @@ def main():
         return
 
     user = st.session_state["user"]
+    if user.get("role") == "teacher":
+        st.warning("Storage: this version uses SQLite. On Streamlit Cloud, accounts and marks may be lost on reboot/redeployment. Use persistent hosting before storing real student records.")
     with st.sidebar:
         st.title("📚 Knowledge Hub")
         if user.get("role") == "teacher":
