@@ -179,10 +179,9 @@ def show_ai_tutor(user):
             st.markdown(question)
 
         try:
-            api_key = st.secrets["GROQ_API_KEY"]
-            from groq import Groq
-
-            client = Groq(api_key=api_key, timeout=30, max_retries=1)
+            api_key = st.secrets["OPENAI_API_KEY"]
+            from openai import OpenAI
+            client = OpenAI(api_key=api_key, timeout=60, max_retries=1)
             student_class = user.get("class_name", "ICSE school")
             system_prompt = f"""
 You are Knowledge Hub AI Tutor for ICSE students.
@@ -200,17 +199,20 @@ Respond in the selected language.
 
             with st.chat_message("assistant"):
                 with st.spinner("AI tutor is thinking..."):
-                    response = client.chat.completions.create(
-                        model="openai/gpt-oss-20b",
-                        messages=messages,
-                        temperature=0.4,
-                        max_completion_tokens=1000,
+                    response = client.responses.create(
+                        model=st.secrets["OPENAI_MODEL"],
+                        instructions=system_prompt,
+                        input=st.session_state["kh_ai_history"][-10:],
+                        max_output_tokens=2000,
+                        store=False,
                     )
-                    answer = response.choices[0].message.content
+
+                    answer = response.output_text
+
                     if not answer:
                         answer = "Please try asking your question again."
-                    st.markdown(answer)
 
+                    st.markdown(answer)
             st.session_state["kh_ai_history"].append(
                 {"role": "assistant", "content": answer}
             )
