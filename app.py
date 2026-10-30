@@ -5,7 +5,6 @@ import streamlit.components.v1 as components
 
 from syllabus_data import EXTRA_SYLLABUS
 from exam_data import EXAMS
-from openai import OpenAI
 
 from database import (
     initialize_database,
@@ -144,7 +143,7 @@ st.markdown(
 
 
 # ======================================================
-# GROQ AI TUTOR
+# OPENAI AI TUTOR
 # ======================================================
 
 def show_ai_tutor(user):
@@ -180,8 +179,12 @@ def show_ai_tutor(user):
             st.markdown(question)
 
         try:
-            api_key = st.secrets["OPENAI_API_KEY"]
             from openai import OpenAI
+            api_key = str(st.secrets.get("OPENAI_API_KEY", "")).strip()
+            model = str(st.secrets.get("OPENAI_MODEL", "")).strip()
+            if not api_key or not model:
+                st.error("AI setup is incomplete. The app owner must add OPENAI_API_KEY and OPENAI_MODEL in Streamlit Cloud Settings → Secrets.")
+                return
             client = OpenAI(api_key=api_key, timeout=60, max_retries=1)
             student_class = user.get("class_name", "ICSE school")
             system_prompt = f"""
@@ -195,13 +198,11 @@ calculations step by step. Give examples when helpful. Encourage understanding.
 Be honest if uncertain. Do not invent official syllabus requirements.
 Respond in the selected language.
 """
-            messages = [{"role": "system", "content": system_prompt}]
-            messages.extend(st.session_state["kh_ai_history"][-10:])
 
             with st.chat_message("assistant"):
                 with st.spinner("AI tutor is thinking..."):
                     response = client.responses.create(
-                        model=st.secrets["OPENAI_MODEL"],
+                        model=model,
                         instructions=system_prompt,
                         input=st.session_state["kh_ai_history"][-10:],
                         max_output_tokens=2000,
@@ -218,12 +219,27 @@ Respond in the selected language.
                 {"role": "assistant", "content": answer}
             )
         except Exception as error:
-            # Keep API credentials and exception details out of the UI.
-            print("AI Tutor error:", type(error).__name__)
-            st.error(
-                "The AI tutor could not respond. Check your internet connection, "
-                "Groq API configuration, and model availability."
-            )
+            # Log safe diagnostics only; never include exception text or credentials.
+            error_name = type(error).__name__
+            status = getattr(error, "status_code", None)
+            print("AI Tutor error:", error_name, "HTTP:", status)
+            if isinstance(error, ModuleNotFoundError) and error.name == "openai":
+                st.error("The OpenAI package is not installed on this deployment. App owner: commit requirements.txt containing openai beside app.py, check the connected branch and competing dependency files, and inspect the installation logs.")
+            elif isinstance(error, ImportError):
+                st.error("The AI library could not load. The app owner must check the deployment installation logs and OpenAI package version.")
+            elif isinstance(error, FileNotFoundError) or error_name == "StreamlitSecretNotFoundError":
+                st.error("OpenAI secrets are missing. The app owner must add OPENAI_API_KEY and OPENAI_MODEL in Streamlit Cloud Settings → Secrets.")
+            elif error_name == "AuthenticationError":
+                st.error("OpenAI rejected the API credentials. The app owner must check the private OPENAI_API_KEY in Cloud Secrets.")
+            elif error_name == "RateLimitError":
+                st.error("OpenAI reported a rate or quota limit. Wait before retrying; the app owner should check API billing, credits and usage limits.")
+            elif error_name in ("NotFoundError", "PermissionDeniedError"):
+                st.error("The requested OpenAI resource was unavailable or access was denied. The app owner should check OPENAI_MODEL and the API project's model permissions.")
+            elif error_name in ("APIConnectionError", "APITimeoutError"):
+                st.error("The app server could not reach OpenAI in time. Please try again shortly.")
+            else:
+                st.error("The OpenAI tutor could not complete the request. Please report this diagnostic code to the app owner: " + error_name)
+
 
     if st.button("🗑️ Clear Chat", key="kh_clear_chat"):
         st.session_state["kh_ai_history"] = []
